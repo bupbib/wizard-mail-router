@@ -11,6 +11,31 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
+def is_valid_message(subject: str, in_reply_to: str, references: str) -> bool:
+    """
+    Проверяет, является ли письмо новым первичным обращением.
+
+    Отфильтровывает ответы (Re:) и пересланные сообщения (Fwd:),
+    анализируя заголовки цепочки и префиксы темы.
+
+    Args:
+        subject: Тема письма.
+        in_reply_to: Значение IMAP-заголовка In-Reply-To.
+        references: Значение IMAP-заголовка References.
+
+    Returns:
+        True, если письмо новое и подлежит дальнейшей обработке.
+        False, если это ответ или пересылка.
+    """
+    if in_reply_to or references:
+        return False 
+
+    if subject.lower().startswith(("fwd:", "fw:", "пересл:", "re:", "отв:")):
+        return False 
+
+    return True 
+
+
 async def _connection_attempt(
     client: aioimaplib.IMAP4_SSL, 
     config: Config, 
