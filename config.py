@@ -16,6 +16,7 @@ class MailSettings(BaseModel):
     password: str 
     work_box: str 
     timeout: float
+    retry_interval: float
 
 
 class Config(BaseModel):
@@ -32,7 +33,8 @@ class Config(BaseModel):
             email=env("EMAIL"),
             password=env("PASSWORD"),
             work_box=env("WORK_BOX"),
-            timeout=env.float("TIMEOUT")
+            timeout=env.float("TIMEOUT"),
+            retry_interval=env.float("RETRY_INTERVAL")
         )
 
         logger.info("Все конфигурационные данные успешно настроены")
