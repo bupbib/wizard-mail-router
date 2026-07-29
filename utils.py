@@ -31,6 +31,8 @@ def partition_emails(emails: dict[str, EmailMessage]) -> FilterResult:
     failed = []
     skip_prefixes = ("fwd:", "fw:", "пересл:", "re:", "отв:")
 
+    logger.info(f"Пришло {len(emails)} писем на первичный анализ")
+
     for msg_id, email in emails.items():
         part = email.get_body(preferencelist=("plain", "html"))
         body = part.get_content().strip() if part else ""
@@ -49,4 +51,5 @@ def partition_emails(emails: dict[str, EmailMessage]) -> FilterResult:
         else:
             passed.append(email_info)
 
+    logger.info(f"Прошли первичный анализ {len(passed)}, не прошли: {len(failed)}")
     return FilterResult(passed=passed, failed=failed)
