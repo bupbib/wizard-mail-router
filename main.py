@@ -9,28 +9,46 @@ from email.message import EmailMessage
 import aioimaplib
 
 from config import Config 
-from utils import get_mail_client, is_valid_message
+from utils import partition_emails
+from mail_client import get_mail_client
 
 
 logger = logging.getLogger(__name__)
 
 
-async def process_single_message(client: aioimaplib.IMAP4_SSL, msg: EmailMessage) -> None:
-    subject = msg["Subject"].strip()
-    from_ = msg["From"] 
-    in_reply_to = msg["In-Reply-To"]
-    references = msg["References"]
+async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> None:
+    """
+    Помечает указанные письма флагом \\Seen (прочитано) в IMAP-сервере.
 
-    if not is_valid_message(subject, in_reply_to, references):
-        pass 
+    Использует пакетную команду STORE над переданным списком UID писем.
 
-    # print(msg)
-    # print('-' * 100)
-    # print(f"{subject=}")
-    # print(f"{from_=}")
-    # print(f"{in_reply_to=}")
-    # print(f"{references=}")
-    # print('-' * 100, end="\n\n")
+    Args:
+        client: Активный SSL-клиент IMAP (aioimaplib).
+        msg_ids: Строка с UID писем через запятую (например, "101,102,103").
+    """
+    if not msg_ids: 
+        return None 
+    
+    status, data = await client.uid("STORE", msg_ids, "+FLAGS", "\\Seen")
+
+    if status == "OK":
+        logger.info(f"Письма {msg_ids} успешно помечены как прочитанное")
+    else:
+        report = data[0].decode() if data else "неизвестная ошибка"
+        logger.error(f"Не удалось пометить письма {msg_ids} как прочитанные, причина: {report}")
+
+
+async def process_messages_batch(client: aioimaplib.IMAP4_SSL, messages: dict[str, EmailMessage]) -> None:
+    partition_result = partition_emails(messages=messages)
+
+    if partition_result.failed:
+        await mark_as_read(client=client, msg_ids=",".join(message.msg_id for message in partition_result.failed))
+
+    if not partition_result.passed:
+        logger.info("Новых писем для классификации нет")
+        return None 
+
+    # TODO: Здесь уже будем отправлять EmailInfo к Апи для классификации
 
 
 async def fetch_multiple_messages(client: aioimaplib.IMAP4_SSL, msg_ids: list[str]) -> dict[str, EmailMessage] | None:
@@ -114,6 +132,9 @@ async def main(config: Config):
             if saved_messages is None:
                 break 
 
+            await process_messages_batch(client=client, messages=saved_messages)
+
+            # TODO: Убрать потом отсюда break
             break 
 
 
