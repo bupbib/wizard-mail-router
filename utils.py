@@ -7,7 +7,7 @@ from models import EmailInfo, FilterResult
 logger = logging.getLogger(__name__)
 
 
-def partition_emails(emails: dict[str, EmailMessage]) -> FilterResult:
+def partition_emails(messages: dict[str, EmailMessage]) -> FilterResult:
     """
     Разделяет письма на две категории: новые темы и ответы/пересылки.
 
@@ -20,7 +20,7 @@ def partition_emails(emails: dict[str, EmailMessage]) -> FilterResult:
     или просто пометить прочитанными.
 
     Args:
-        emails: Словарь с письмами.
+        messages: Словарь с письмами.
 
     Returns:
         FilterResult: Объект с двумя списками:
@@ -31,9 +31,9 @@ def partition_emails(emails: dict[str, EmailMessage]) -> FilterResult:
     failed = []
     skip_prefixes = ("fwd:", "fw:", "пересл:", "re:", "отв:")
 
-    logger.info(f"Пришло {len(emails)} писем на первичный анализ")
+    logger.info(f"Пришло {len(messages)} писем на первичный анализ")
 
-    for msg_id, email in emails.items():
+    for msg_id, email in messages.items():
         part = email.get_body(preferencelist=("plain", "html"))
         body = part.get_content().strip() if part else ""
 
