@@ -47,9 +47,13 @@ def partition_emails(emails: dict[str, EmailMessage]) -> FilterResult:
         )
 
         if email_info.in_reply_to or email_info.references or email_info.subject.lower().startswith(skip_prefixes):
+            result_partition = "НЕ прошло"
             failed.append(email_info)
         else:
+            result_partition = "прошло"
             passed.append(email_info)
 
-    logger.info(f"Прошли первичный анализ {len(passed)}, не прошли: {len(failed)}")
+        logger.info(f"Письмо {email_info!r} {result_partition} первичный анализ")
+
+    logger.info(f"Прошли первичный анализ: {len(passed)} шт., не прошли: {len(failed)} шт.")
     return FilterResult(passed=passed, failed=failed)
