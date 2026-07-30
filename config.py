@@ -19,8 +19,21 @@ class MailSettings(BaseModel):
     retry_interval: float
 
 
+class RedirectionSettings(BaseModel):
+    sales: list[str]
+    onec: list[str]
+    ork: list[str]
+    hr: list[str]
+
+
+class ClassificationSettings(BaseModel):
+    rules: dict[str, str]
+
+
 class Config(BaseModel):
     mail: MailSettings
+    redirection: RedirectionSettings
+    classification: ClassificationSettings
 
     @classmethod
     def from_env(cls, path: str | None = None) -> "Config":
@@ -37,9 +50,24 @@ class Config(BaseModel):
             retry_interval=env.float("RETRY_INTERVAL")
         )
 
+        redirection = RedirectionSettings(
+            sales=env.list("SALES"),
+            onec=env.list("ONEC"),
+            ork=env.list("ORK"),
+            hr=env.list("HR")
+        )
+
+        classification = ClassificationSettings(
+            rules=env.dict("RULES")
+        )
+
         logger.info("Все конфигурационные данные успешно настроены")
 
-        return cls(mail=mail)
+        return cls(
+            mail=mail, 
+            redirection=redirection, 
+            classification=classification
+        )
 
     @staticmethod
     def setup_logging() -> None:
