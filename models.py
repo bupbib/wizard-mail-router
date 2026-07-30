@@ -11,6 +11,6 @@ class EmailInfo(BaseModel, frozen=True):
 
 
 class FilterResult(BaseModel):
-    classified: dict[EmailInfo, list]
+    classified: dict[EmailInfo, list[str]]
     passed: list[EmailInfo]
     failed: list[EmailInfo] 
