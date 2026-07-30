@@ -1,32 +1,39 @@
 import logging 
 from email.message import EmailMessage
+from email.utils import parseaddr
 from pprint import pprint 
 
 from models import EmailInfo, FilterResult
+from config import Config 
 
 logger = logging.getLogger(__name__)
 
 
-def partition_emails(messages: dict[str, EmailMessage]) -> FilterResult:
+def partition_emails(messages: dict[str, EmailMessage], config: Config) -> FilterResult:
     """
-    Разделяет письма на две категории: новые темы и ответы/пересылки.
+    Разделяет входящие письма на три категории:
+    1. Ответы/пересылки (failed) — исключаются из обработки.
+    2. Совпадения по локальным правилам (classified) — маршрутизируются в отделы 
+       напрямую без обращения к ИИ.
+    3. Новые целевые письма (passed) — отправляются на классификацию в ИИ-сервис.
 
-    Критерии определения ответа/пересылки:
-        - Наличие заголовков In-Reply-To или References
-        - Тема начинается с одного из префиксов: Re:, Fwd:, Пересл:, Отв:
-
-    Письма без признаков ответа считаются новыми темами и требуют AI-классификации.
-    Ответы и пересылки можно маршрутизировать на основе родительского письма
-    или просто пометить прочитанными.
+    Критерии фильтрации:
+        - Исключение: наличие заголовков In-Reply-To/References или префиксов Re:, Fwd:, etc.
+        - Локальное правило: адрес отправителя (извлекается через parseaddr) найден в config.classification.rules.
+        - ИИ-классификация: письмо является новым и не подпадает под локальные правила.
 
     Args:
-        messages: Словарь с письмами.
+        messages (dict[str, EmailMessage]): Словарь извлеченных писем {msg_id: EmailMessage}.
+        config (Config): Объект конфигурации приложения с правилами маршрутизации и фильтрации.
 
     Returns:
-        FilterResult: Объект с двумя списками:
-            - passed: письма-инициаторы новых тем (требуют AI)
-            - failed: письма-ответы или пересылки (не требуют AI)
+        FilterResult: Объект результатов со следующими полями:
+            - classified (dict[EmailInfo, list[str]]): Письма, классифицированные без ИИ,
+              маппированные на список адресов перенаправления.
+            - passed (list[EmailInfo]): Письма-инициаторы новых тем, требующие AI-классификации.
+            - failed (list[EmailInfo]): Письма-ответы или пересылки, не требующие AI-обработки.
     """
+    classified = {}
     passed = []
     failed = []
     skip_prefixes = ("fwd:", "fw:", "пересл:", "re:", "отв:")
@@ -46,14 +53,31 @@ def partition_emails(messages: dict[str, EmailMessage]) -> FilterResult:
             body=body
         )
 
+        _, clean_email = parseaddr(email_info.from_)
+        clean_email = clean_email.lower().strip()
+
         if email_info.in_reply_to or email_info.references or email_info.subject.lower().startswith(skip_prefixes):
-            result_partition = "НЕ прошло"
+            result_partition = "НЕ прошло первичный анализ"
             failed.append(email_info)
+        elif (department := config.classification.rules.get(clean_email)) is not None:
+            redirect = getattr(config.redirection, department, None) 
+
+            if redirect is not None:
+                classified[email_info] = redirect
+                result_partition = "успешно классифицировано для перенаправления без помощи ИИ"
+            else:
+                logger.error(
+                    f"Несмотря на то, что департамент: {department} удалось идентифицировать в {config.classification.rules} "
+                    f"- в {config.redirection} нет аттрибута {department}, необходимо добавить значения в .env,"
+                    f"текущее письмо было добавлено в классификацию для ИИ"
+                )
+                result_partition = "не удалось успешно классифицировать из-за нестыковки параметров, добавлено для классификации ИИ"
+                passed.append(email_info)
         else:
-            result_partition = "прошло"
+            result_partition = "прошло первичный анализ"
             passed.append(email_info)
 
-        logger.info(f"Письмо {email_info!r} {result_partition} первичный анализ")
+        logger.info(f"Письмо {email_info!r} {result_partition}")
 
-    logger.info(f"Прошли первичный анализ: {len(passed)} шт., не прошли: {len(failed)} шт.")
-    return FilterResult(passed=passed, failed=failed)
+    logger.info(f"Классифицированы без ИИ: {len(classified)} шт., добавлены на классификацию ИИ: {len(passed)} шт., не прошли: {len(failed)} шт.")
+    return FilterResult(classified=classified, passed=passed, failed=failed)
