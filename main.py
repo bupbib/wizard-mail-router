@@ -1,19 +1,105 @@
 import re 
 import asyncio 
 import email 
+import time 
+from json import JSONDecodeError
 import logging 
 from datetime import datetime, timedelta
 from email.policy import default
 from email.message import EmailMessage
 
 import aioimaplib
+import httpx 
+from pydantic import ValidationError
 
 from config import Config 
+from models import EmailInfo, ApiResponse, ResultApiClassification
 from utils import partition_emails
 from mail_client import get_mail_client
 
 
 logger = logging.getLogger(__name__)
+
+
+async def forward_email(
+    msg_id: str,
+    original_message: EmailMessage,
+    recipients: list[str],
+    config: Config
+):
+    pass 
+
+
+async def classify_email(
+    client: httpx.AsyncClient, 
+    message: EmailInfo, 
+    config: Config
+) -> dict[EmailInfo, ResultApiClassification] | None:
+    """
+    Отправляет письмо в AI-классификатор и возвращает результат.
+
+    Функция вызывает внешний API для классификации письма по трём типам:
+    ORK, HR, sales. В случае успеха возвращает словарь с привязкой
+    к исходному EmailInfo для дальнейшей маршрутизации.
+
+    Args:
+        client: Асинхронный HTTP-клиент (httpx.AsyncClient).
+        message: Объект EmailInfo с данными письма (тема, отправитель, тело).
+        config: Объект конфигурации с параметрами API.
+
+    Returns:
+        dict[EmailInfo, ResultApiClassification] | None:
+            - Словарь {EmailInfo: ResultApiClassification} при успехе
+            - None при любой ошибке (сеть, парсинг, статус != 200)
+    """
+    headers = {
+        "Authorization": f"Bearer {config.api.token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "version": config.api.version,
+        "command": "method:call",
+        "payload": {
+            "name": config.api.method_name,
+            "arguments": {
+                config.api.argument_name: message.model_dump_json()
+            },
+            "execution": {
+                "mode": "sync"
+            }
+        }
+    }
+    response = None
+
+    try:
+        logger.info(f"Отправляю письмо {message.msg_id} в Апи на классификацию")
+        response = await client.post(
+            url=config.api.url,
+            headers=headers,
+            json=payload
+        ) 
+    
+        status_code = response.status_code
+
+        if status_code != 200:
+            logger.error(f"Апи ответил не 200 статус-кодом, статус-код ответа: {status_code}, text: {response.text}")
+            return 
+
+        api_response = ApiResponse(**response.json())
+        classification_result = api_response.payload.result.data 
+
+        logger.info(f"Результат классификации письма {message.msg_id} от Апи: {classification_result}")
+        return {message: classification_result}
+    except httpx.HTTPError as http_err:
+        logger.error(f"Ошибка сети при подключении к API: {http_err}", exc_info=True)
+    except (JSONDecodeError, ValidationError) as valid_err:
+        if response is not None:
+            logger.error(
+                f"Не получилось распарсить структуру ответа в известную схему, полученный ответ с апи: {response.text}"
+                f", ошибка: {valid_err}", exc_info=True
+            )
+    except Exception as err:
+        logger.error(f"Неожиданная ошибка при подключении к API: {err}", exc_info=True)
 
 
 async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> None:
@@ -38,17 +124,41 @@ async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> None:
         logger.error(f"Не удалось пометить письма {msg_ids} как прочитанные, причина: {report}")
 
 
-async def process_messages_batch(client: aioimaplib.IMAP4_SSL, messages: dict[str, EmailMessage]) -> None:
-    partition_result = partition_emails(messages=messages)
+async def process_messages_batch(
+    client: aioimaplib.IMAP4_SSL, 
+    config: Config,
+    messages: dict[str, EmailMessage]
+) -> None:
+    partition_result = partition_emails(messages=messages, config=config) 
 
-    if partition_result.failed:
-        await mark_as_read(client=client, msg_ids=",".join(message.msg_id for message in partition_result.failed))
+    messages_to_forward = []
+    ids_to_mark_as_read = []
 
-    if not partition_result.passed:
-        logger.info("Новых писем для классификации нет")
-        return None 
+    for email_info in partition_result.failed:
+        ids_to_mark_as_read.append(email_info.msg_id)
 
-    # TODO: Здесь уже будем отправлять EmailInfo к Апи для классификации
+    for email_info, recipients in partition_result.classified.items():
+        messages_to_forward.append({
+            "msg_id": email_info.msg_id,
+            "original_message": messages[email_info.msg_id], 
+            "recipients": recipients,
+            "config": config
+        })
+
+    if partition_result.passed:
+        logger.info("Отправляю письма на классификацию ИИ")
+        timeout_config = httpx.Timeout(timeout=30, connect=10)
+
+        async with httpx.AsyncClient(timeout=timeout_config) as http_client:
+            result_classify = await asyncio.gather(
+                *(classify_email(client=http_client, message=message, config=config) 
+                  for message in partition_result.passed)    
+            )
+
+    # TODO: Далее разбираем результат классификации от ИИ, провалившиеся - добавляем в ids_to_mark_as_read (None - лучше пропустить)
+    # TODO: А успешные добавляем в messages_to_forward, далее пачкой пересылаем сообщения, успешные добавляем в ids_to_mark_as_read
+    # TODO: И в конце пачкой помечаем все письма из ids_to_mark_as_read
+
 
 
 async def fetch_multiple_messages(client: aioimaplib.IMAP4_SSL, msg_ids: list[str]) -> dict[str, EmailMessage] | None:
@@ -132,7 +242,7 @@ async def main(config: Config):
             if saved_messages is None:
                 break 
 
-            await process_messages_batch(client=client, messages=saved_messages)
+            await process_messages_batch(client=client, config=config, messages=saved_messages)
 
             # TODO: Убрать потом отсюда break
             break 
