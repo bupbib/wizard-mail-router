@@ -30,10 +30,19 @@ class ClassificationSettings(BaseModel):
     rules: dict[str, str]
 
 
+class ApiSettings(BaseModel):
+    url: str 
+    token: str 
+    version: str 
+    method_name: str 
+    argument_name: str 
+
+
 class Config(BaseModel):
     mail: MailSettings
     redirection: RedirectionSettings
     classification: ClassificationSettings
+    api: ApiSettings
 
     @classmethod
     def from_env(cls, path: str | None = None) -> "Config":
@@ -61,12 +70,21 @@ class Config(BaseModel):
             rules=env.dict("RULES")
         )
 
+        api = ApiSettings(
+            url=env("URL"),
+            token=env("TOKEN"),
+            version=env("VERSION"),
+            method_name=env("METHOD_NAME"),
+            argument_name=env("ARGUMENT_NAME")
+        )
+
         logger.info("Все конфигурационные данные успешно настроены")
 
         return cls(
             mail=mail, 
             redirection=redirection, 
-            classification=classification
+            classification=classification,
+            api=api
         )
 
     @staticmethod
