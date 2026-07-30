@@ -1,4 +1,4 @@
-from typing import Literal 
+from typing import Literal, Any 
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,26 @@ class FilterResult(BaseModel):
     failed: list[EmailInfo] 
 
 
-class AnswerFromApi(BaseModel):
+class ApiResponse(BaseModel):
+    """Полный ответ от API"""
+    version: str 
+    id: str 
+    success: bool 
+    payload: ApiPayload 
+
+
+class ApiPayload(BaseModel):
+    """Payload ответа API"""
+    result: ApiResult 
+
+
+class ApiResult(BaseModel):
+    """Результат выполнения метода API"""
+    data: ResultApiClassification
+    attachments: list[Any]
+
+
+class ResultApiClassification(BaseModel):
     is_target: bool 
     department: Literal["ork", "hr", "sales"] | None 
     reasoning: str = Field(..., min_length=1)
