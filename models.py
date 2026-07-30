@@ -1,7 +1,7 @@
 from pydantic import BaseModel 
 
 
-class EmailInfo(BaseModel):
+class EmailInfo(BaseModel, frozen=True):
     msg_id: str 
     subject: str 
     from_: str 
@@ -11,5 +11,6 @@ class EmailInfo(BaseModel):
 
 
 class FilterResult(BaseModel):
+    classified: dict[EmailInfo, list]
     passed: list[EmailInfo]
     failed: list[EmailInfo] 
