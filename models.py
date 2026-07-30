@@ -1,4 +1,6 @@
-from pydantic import BaseModel 
+from typing import Literal 
+
+from pydantic import BaseModel, Field
 
 
 class EmailInfo(BaseModel, frozen=True):
@@ -14,3 +16,9 @@ class FilterResult(BaseModel):
     classified: dict[EmailInfo, list[str]]
     passed: list[EmailInfo]
     failed: list[EmailInfo] 
+
+
+class AnswerFromApi(BaseModel):
+    is_target: bool 
+    department: Literal["ork", "hr", "sales"] | None 
+    reasoning: str = Field(..., min_length=1)
