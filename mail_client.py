@@ -1,5 +1,5 @@
 import logging 
-from typing import Literal, AsyncGenerator, AsyncContextManager
+from typing import Literal, AsyncGenerator
 from contextlib import asynccontextmanager
 
 import aioimaplib 
@@ -48,7 +48,7 @@ async def _connection_attempt(
 
 
 @asynccontextmanager
-async def get_mail_client(config: Config) -> AsyncGenerator[aioimaplib.IMAP4_SSL, None]:
+async def get_mail_imap_client(config: Config) -> AsyncGenerator[aioimaplib.IMAP4_SSL, None]:
     """
     Асинхронный контекстный менеджер для подключения к IMAP-серверу.
 
@@ -74,8 +74,8 @@ async def get_mail_client(config: Config) -> AsyncGenerator[aioimaplib.IMAP4_SSL
         от сервера или описание проблемы.
     """
     client = aioimaplib.IMAP4_SSL(
-        host=config.mail.host,
-        port=config.mail.port,
+        host=config.mail.imap_host,
+        port=config.mail.imap_port,
         timeout=config.mail.timeout
     )
     logger.info(f"Клиент создан, состояние (до wait_hello): {client.get_state()}")
