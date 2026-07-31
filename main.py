@@ -1,7 +1,6 @@
 import re 
 import asyncio 
 import email 
-import time 
 from json import JSONDecodeError
 import logging 
 from datetime import datetime, timedelta
@@ -9,25 +8,128 @@ from email.policy import default
 from email.message import EmailMessage
 
 import aioimaplib
+import aiosmtplib
 import httpx 
 from pydantic import ValidationError
 
 from config import Config 
-from models import EmailInfo, ApiResponse, ResultApiClassification
+from models import EmailInfo, ApiResponse, ResultApiClassification, ForwardMessage
 from utils import partition_emails
-from mail_client import get_mail_client
+from mail_client import get_mail_imap_client
 
 
 logger = logging.getLogger(__name__)
 
 
-async def forward_email(
-    msg_id: str,
-    original_message: EmailMessage,
-    recipients: list[str],
+async def forward_messages(
+    messages: list[ForwardMessage],
     config: Config
-):
-    pass 
+) -> list[str]:
+    """
+    Пересылает список писем через SMTP с сохранением оригинального форматирования и вложений.
+
+    Собирает новое MIME-сообщение с локализованной русской шапкой (От, Кому, Дата, Тема),
+    копирует все прикрепленные файлы и отправляет их адресатам через TLS-соединение.
+    Обрабатывает частичную доставку адресатам и специфичные тайм-ауты сервера (SMTPReadTimeoutError).
+
+    Args:
+        messages: Список объектов ForwardMessage, содержащих исходное письмо, 
+                  список получателей и msg_id.
+        config: Объект конфигурации с параметрами подключения к SMTP-серверу 
+                (хост, порт, учетные данные, timeout).
+
+    Returns:
+        Список msg_id писем, которые были успешно доставлены или приняты сервером.
+    """
+    successful_msg_ids = []
+    try:
+        async with aiosmtplib.SMTP(
+            hostname=config.mail.smtp_host, 
+            port=config.mail.smtp_port, 
+            timeout=config.mail.timeout,
+            use_tls=True,
+            username=config.mail.email,
+            password=config.mail.password 
+            ) as client:
+            
+            for message in messages:
+                try:
+                    orig = message.original_message
+
+                    original_from = orig["From"]
+                    original_to = orig["To"]
+                    original_date = (orig["Date"]).datetime
+                    original_subject = orig["Subject"]
+
+                    day = [
+                        "Понедельник", "Вторник", "Среда", 
+                        "Четверг", "Пятница", "Суббота", "Воскресенье"
+                    ][original_date.weekday()]
+                    month = [
+                        "", "января", "февраля", "марта", "апреля", "мая", "июня",
+                        "июля", "августа", "сентября", "октября", "ноября", "декабря"
+                    ][original_date.month]
+                    z = original_date.strftime("%z")
+                    original_date = original_date.strftime(f"{day}, %d {month} %Y, %H:%M {z[:3]}:{z[3:]}")
+
+                    fwd_header = (
+                        "-------- Пересылаемое сообщение --------\n"
+                        f"От кого: {original_from}\n"
+                        f"Кому: {original_to}\n"
+                        f"Дата: {original_date}\n"
+                        f"Тема: {original_subject}\n\n"
+                    )
+
+                    new_msg = EmailMessage()
+
+                    new_msg["To"] = ", ".join(message.recipients)
+                    new_msg["From"] = config.mail.email 
+                    new_msg["Subject"] = f"Fwd: {original_subject}"
+
+                    orig_body = orig.get_body(preferencelist=("plain", "html"))
+                    orig_text = orig_body.get_content() if orig_body else ""    
+
+                    new_msg.set_content(fwd_header + orig_text)
+
+                    for part in orig.iter_attachments():
+                        filename = part.get_filename()
+                        content_type = part.get_content_type()
+                        maintype, subtype = content_type.split('/', 1)
+                        payload = part.get_payload(decode=True)
+
+                        new_msg.add_attachment(
+                            payload,
+                            maintype=maintype,
+                            subtype=subtype,
+                            filename=filename
+                        )
+
+                    errors, response_text = await client.send_message(
+                        new_msg,
+                        sender=config.mail.email,
+                        recipients=message.recipients
+                    )
+
+                    if errors:
+                        logger.warning(
+                            f"Письмо {message.msg_id} отправлено частично. "
+                            f"Не удалось доставить адресатам: {errors}"
+                        )
+                    else:
+                        logger.info(
+                            f"Письмо {message.msg_id} успешно доставлено всем адресатам: {message.recipients}"
+                            f"{response_text=}"
+                        )
+
+                    successful_msg_ids.append(message.msg_id) 
+                except (aiosmtplib.SMTPException, aiosmtplib.SMTPDataError) as msg_err:
+                    logger.error(f"Ошибка при отправке письма {message.msg_id}: {msg_err}", exc_info=True)  
+    except aiosmtplib.SMTPConnectError as con_err:
+        logger.error(f"Не удалось подключиться к серверу при входе в контекст: {con_err}", exc_info=True)
+    except aiosmtplib.SMTPException as smtp_err:
+        logger.error(f"Произошла ошибка SMTP внутри контекста: {smtp_err}", exc_info=True)
+
+    return successful_msg_ids 
 
 
 async def classify_email(
@@ -128,6 +230,20 @@ async def process_messages_batch(
     config: Config,
     messages: dict[str, EmailMessage]
 ) -> None:
+    """
+    Осуществляет конвейерную обработку входящих писем.
+
+    Сначала разделяет письма на нецелевые, предклассифицированные и подходящие под ИИ-анализ.
+    Отправляет целевую группу на асинхронную классификацию в ИИ, распределяет успешные 
+    письма по департаментам и выполняет массовую пересылку (forward). В завершение 
+    помечает прочитанными (`\\Seen`) в IMAP все обработанные, нецелевые и сбойные письма.
+
+    Args:
+        client: Активный SSL-клиент IMAP (aioimaplib) для маркировки писем.
+        config: Объект конфигурации с правилами маршрутизации и SMTP/ИИ параметрами.
+        messages: Словарь с входящими письмами, где ключ — UID письма, 
+                  а значение — объект EmailMessage.
+    """
     partition_result = partition_emails(messages=messages, config=config) 
 
     messages_to_forward = []
@@ -137,12 +253,9 @@ async def process_messages_batch(
         ids_to_mark_as_read.append(email_info.msg_id)
 
     for email_info, recipients in partition_result.classified.items():
-        messages_to_forward.append({
-            "msg_id": email_info.msg_id,
-            "original_message": messages[email_info.msg_id], 
-            "recipients": recipients,
-            "config": config
-        })
+        messages_to_forward.append(
+            ForwardMessage(msg_id=email_info.msg_id, original_message=messages[email_info.msg_id], recipients=recipients)
+        )
 
     if partition_result.passed:
         logger.info("Отправляю письма на классификацию ИИ")
@@ -160,29 +273,24 @@ async def process_messages_batch(
 
             if classify.is_target and classify.department: 
                 redirect = getattr(config.redirection, classify.department.lower(), None)
-                print(redirect)
 
                 if redirect is not None:
-                    messages_to_forward.append({
-                        "msg_id": email_info.msg_id,
-                        "original_message": messages[email_info.msg_id], 
-                        "recipients": redirect,
-                        "config": config
-                    }) 
+                    messages_to_forward.append(
+                        ForwardMessage(msg_id=email_info.msg_id, original_message=messages[email_info.msg_id], recipients=redirect)
+                    ) 
                 else:
                     # по сути таких ситуаций быть не должно, но на всякий случай
                     logger.error(f"{classify.department.lower()=} не удалось найти в {config.redirection}")
             else:
                 ids_to_mark_as_read.append(email_info.msg_id) 
 
-        
+    if messages_to_forward:
+        logger.info(f"Начинаю переотправку писем ответственным: {len(messages_to_forward)}")
+        forward_ids = await forward_messages(messages=messages_to_forward, config=config)
+        ids_to_mark_as_read.extend(forward_ids)
 
-
-
-    # TODO: Далее разбираем результат классификации от ИИ, провалившиеся - добавляем в ids_to_mark_as_read (None - лучше пропустить)
-    # TODO: А успешные добавляем в messages_to_forward, далее пачкой пересылаем сообщения, успешные добавляем в ids_to_mark_as_read
-    # TODO: И в конце пачкой помечаем все письма из ids_to_mark_as_read
-
+    if ids_to_mark_as_read:
+        await mark_as_read(client=client, msg_ids=",".join(ids_to_mark_as_read))
 
 
 async def fetch_multiple_messages(client: aioimaplib.IMAP4_SSL, msg_ids: list[str]) -> dict[str, EmailMessage] | None:
@@ -241,7 +349,7 @@ async def fetch_multiple_messages(client: aioimaplib.IMAP4_SSL, msg_ids: list[st
 async def main(config: Config):
     config.setup_logging()
 
-    async with get_mail_client(config) as client:
+    async with get_mail_imap_client(config) as client:
         while True:
             week_ago = (datetime.today() - timedelta(days=7)).strftime("%d-%b-%Y")
 
