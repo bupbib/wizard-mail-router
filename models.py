@@ -1,4 +1,5 @@
 from typing import Literal, Any 
+from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 from email.message import EmailMessage
@@ -13,10 +14,11 @@ class EmailInfo(BaseModel, frozen=True):
     body: str  
 
 
-class ForwardMessage(BaseModel):
+@dataclass
+class ForwardMessage:
     msg_id: str 
     original_message: EmailMessage
-    recepients: list[str]
+    recipients: list[str]
 
 
 class FilterResult(BaseModel):
