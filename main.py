@@ -149,10 +149,35 @@ async def process_messages_batch(
         timeout_config = httpx.Timeout(timeout=30, connect=10)
 
         async with httpx.AsyncClient(timeout=timeout_config) as http_client:
-            result_classify = await asyncio.gather(
-                *(classify_email(client=http_client, message=message, config=config) 
-                  for message in partition_result.passed)    
+            classify_results = await asyncio.gather(
+                *(classify_email(client=http_client, message=email_info, config=config) 
+                  for email_info in partition_result.passed)    
             )
+
+        for email_info, classify in zip(partition_result.passed, classify_results):
+            if classify is None: 
+                continue 
+
+            if classify.is_target and classify.department: 
+                redirect = getattr(config.redirection, classify.department.lower(), None)
+                print(redirect)
+
+                if redirect is not None:
+                    messages_to_forward.append({
+                        "msg_id": email_info.msg_id,
+                        "original_message": messages[email_info.msg_id], 
+                        "recipients": redirect,
+                        "config": config
+                    }) 
+                else:
+                    # по сути таких ситуаций быть не должно, но на всякий случай
+                    logger.error(f"{classify.department.lower()=} не удалось найти в {config.redirection}")
+            else:
+                ids_to_mark_as_read.append(email_info.msg_id) 
+
+        
+
+
 
     # TODO: Далее разбираем результат классификации от ИИ, провалившиеся - добавляем в ids_to_mark_as_read (None - лучше пропустить)
     # TODO: А успешные добавляем в messages_to_forward, далее пачкой пересылаем сообщения, успешные добавляем в ids_to_mark_as_read
