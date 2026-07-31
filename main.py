@@ -34,13 +34,12 @@ async def classify_email(
     client: httpx.AsyncClient, 
     message: EmailInfo, 
     config: Config
-) -> dict[EmailInfo, ResultApiClassification] | None:
+) -> ResultApiClassification | None:
     """
     Отправляет письмо в AI-классификатор и возвращает результат.
 
     Функция вызывает внешний API для классификации письма по трём типам:
-    ORK, HR, sales. В случае успеха возвращает словарь с привязкой
-    к исходному EmailInfo для дальнейшей маршрутизации.
+    ORK, HR, sales. В случае успеха возвращает ResultApiClassification.
 
     Args:
         client: Асинхронный HTTP-клиент (httpx.AsyncClient).
@@ -48,8 +47,8 @@ async def classify_email(
         config: Объект конфигурации с параметрами API.
 
     Returns:
-        dict[EmailInfo, ResultApiClassification] | None:
-            - Словарь {EmailInfo: ResultApiClassification} при успехе
+        ResultApiClassification | None:
+            - ResultApiClassification при успехе
             - None при любой ошибке (сеть, парсинг, статус != 200)
     """
     headers = {
@@ -89,7 +88,7 @@ async def classify_email(
         classification_result = api_response.payload.result.data 
 
         logger.info(f"Результат классификации письма {message.msg_id} от Апи: {classification_result}")
-        return {message: classification_result}
+        return classification_result
     except httpx.HTTPError as http_err:
         logger.error(f"Ошибка сети при подключении к API: {http_err}", exc_info=True)
     except (JSONDecodeError, ValidationError) as valid_err:
