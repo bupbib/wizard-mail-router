@@ -10,8 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class MailSettings(BaseModel):
-    host: str 
-    port: int 
+    imap_host: str 
+    imap_port: int 
+    smtp_host: str 
+    smtp_port: int
     email: str 
     password: str 
     work_box: str 
@@ -50,8 +52,10 @@ class Config(BaseModel):
         env.read_env(path, override=True)
 
         mail = MailSettings(
-            host=env("HOST"),
-            port=env.int("PORT"),
+            imap_host=env("IMAP_HOST"),
+            imap_port=env.int("IMAP_PORT"),
+            smtp_host=env("SMTP_HOST"),
+            smtp_port=env.int("SMTP_PORT"),
             email=env("EMAIL"),
             password=env("PASSWORD"),
             work_box=env("WORK_BOX"),
