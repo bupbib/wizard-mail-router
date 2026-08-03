@@ -1,10 +1,14 @@
 import logging 
+import httpx
+from json import JSONDecodeError
 from email.message import EmailMessage
 from email.utils import parseaddr
-from pprint import pprint 
 
-from models import EmailInfo, FilterResult
+from pydantic import ValidationError
+
+from models import EmailInfo, FilterResult, ApiResponse
 from config import Config 
+
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +85,51 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
 
     logger.info(f"Классифицированы без ИИ: {len(classified)} шт., добавлены на классификацию ИИ: {len(passed)} шт., не прошли: {len(failed)} шт.")
     return FilterResult(classified=classified, passed=passed, failed=failed)
+
+
+async def safe_api_post(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict,
+    **kwargs
+) -> ApiResponse | None:
+    """
+    Безопасно выполняет POST-запрос к API с обработкой всех ошибок.
+    
+    Функция-обертка для httpx.post, которая перехватывает и логирует:
+        - Сетевые ошибки (HTTPError)
+        - Ошибки парсинга JSON (JSONDecodeError)
+        - Ошибки валидации Pydantic (ValidationError)
+        - HTTP-статусы, отличные от 200
+    
+    Args:
+        client: Асинхронный HTTP-клиент (httpx.AsyncClient).
+        url (str): Адрес эндпоинта.
+        headers (dict): HTTP-заголовки запроса.
+        **kwargs: Дополнительные параметры httpx (json, files, params и т.д.).
+    """
+    response = None
+    try:
+        response = await client.post(
+            url=url,
+            headers=headers,
+            **kwargs
+        ) 
+
+        status_code = response.status_code
+
+        if status_code != 200:
+            logger.error(f"Апи ответил не 200 статус-кодом, статус-код ответа: {status_code}, ответ: {response.text}")
+            return 
+
+        return ApiResponse(**response.json())
+    except httpx.HTTPError as http_err:
+        logger.error(f"Ошибка сети при подключении к API: {http_err}", exc_info=True) 
+    except (JSONDecodeError, ValidationError) as valid_err:
+        if response is not None:
+            logger.error(
+                f"Не получилось распарсить структуру ответа в известную схему, полученный ответ с апи: {response.text}"
+                f", ошибка: {valid_err}", exc_info=True
+            ) 
+    except Exception as err:
+        logger.error(f"Неожиданная ошибка при подключении к API: {err}", exc_info=True) 
