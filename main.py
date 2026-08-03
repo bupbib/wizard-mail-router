@@ -1,7 +1,6 @@
 import re 
 import asyncio 
 import email 
-from json import JSONDecodeError
 import logging 
 from datetime import datetime, timedelta
 from email.policy import default
@@ -10,11 +9,13 @@ from email.message import EmailMessage
 import aioimaplib
 import aiosmtplib
 import httpx 
-from pydantic import ValidationError
 
 from config import Config 
-from models import EmailInfo, ApiResponse, ResultApiClassification, ForwardMessage
-from utils import partition_emails
+from models import (
+    EmailInfo, ApiFilePayload, ResultApiClassification, 
+    ForwardMessage, ApiMethodPayload
+)
+from utils import partition_emails, safe_api_post
 from mail_client import get_mail_imap_client
 
 
@@ -132,27 +133,96 @@ async def forward_messages(
     return successful_msg_ids 
 
 
+async def upload_file_bytes(
+    client: httpx.AsyncClient,
+    filename: str,
+    file_bytes: bytes,
+    config: Config 
+) -> str | None:
+    """
+    Загружает файл в API и возвращает его идентификатор.
+    
+    Функция отправляет файл (вложение письма) на эндпоинт /files API,
+    получает присвоенный ID и возвращает его для дальнейшего использования
+    в запросе на классификацию.
+    
+    Args:
+        client: Асинхронный HTTP-клиент (httpx.AsyncClient) для выполнения запроса.
+        filename (str): Имя файла (из заголовка вложения).
+        file_bytes (bytes): Содержимое файла в виде байтов.
+        config (Config): Объект конфигурации с параметрами API (токен, URL).
+    
+    Returns:
+        str | None:
+            - str: Идентификатор загруженного файла при успехе.
+            - None: При ошибке загрузки или невалидном ответе API.
+    """
+    headers = {"Authorization": f"Bearer {config.api.token}"}
+    files = {"file": (filename, file_bytes)}
+
+    logger.info(f"Отправляю запрос на получение id файла: {filename}")
+    api_response = await safe_api_post(
+        client=client,
+        url=config.api.url_files,
+        headers=headers,
+        files=files
+    )
+
+    if api_response is None:
+        return None 
+    elif not isinstance(api_response.payload, ApiFilePayload):
+        logger.error(f"Неожиданный тип payload: {type(api_response.payload)=}")
+        return None 
+
+    file_id = api_response.payload.file.id 
+    logger.info(f"Результат получения id файла {filename}: {file_id}")
+    return file_id
+
+
 async def classify_email(
     client: httpx.AsyncClient, 
-    message: EmailInfo, 
+    email_info: EmailInfo,
+    original_message: EmailMessage, 
     config: Config
 ) -> ResultApiClassification | None:
     """
     Отправляет письмо в AI-классификатор и возвращает результат.
-
-    Функция вызывает внешний API для классификации письма по трём типам:
-    ORK, HR, sales. В случае успеха возвращает ResultApiClassification.
-
+    
+    Функция выполняет полный цикл классификации:
+        1. Извлекает все вложения из письма.
+        2. Асинхронно загружает их в API (если есть).
+        3. Отправляет запрос на классификацию с метаданными письма и ID файлов.
+        4. Возвращает результат: является ли письмо целевым и в какой отдел.
+    
     Args:
-        client: Асинхронный HTTP-клиент (httpx.AsyncClient).
-        message: Объект EmailInfo с данными письма (тема, отправитель, тело).
-        config: Объект конфигурации с параметрами API.
-
+        client: Асинхронный HTTP-клиент (httpx.AsyncClient) для выполнения запросов.
+        email_info (EmailInfo): Объект с данными письма (тема, отправитель, тело).
+        original_message (EmailMessage): Оригинальный объект письма для извлечения вложений.
+        config (Config): Объект конфигурации с параметрами API.
+    
     Returns:
         ResultApiClassification | None:
-            - ResultApiClassification при успехе
-            - None при любой ошибке (сеть, парсинг, статус != 200)
+            - ResultApiClassification: При успешной классификации.
+            - None: При любой ошибке.
     """
+    file_ids = []
+    attachments = list(original_message.iter_attachments())
+
+    if attachments:
+        upload_tasks = [
+            upload_file_bytes(
+                client=client,
+                filename=attachment.get_filename() or "",                   # type: ignore
+                file_bytes=attachment.get_payload(decode=True),             # type: ignore
+                config=config
+            )
+            for attachment in attachments
+        ]
+        file_ids = await asyncio.gather(*upload_tasks) 
+
+        if None in file_ids: 
+            return None 
+
     headers = {
         "Authorization": f"Bearer {config.api.token}",
         "Content-Type": "application/json"
@@ -163,44 +233,33 @@ async def classify_email(
         "payload": {
             "name": config.api.method_name,
             "arguments": {
-                config.api.argument_name: message.model_dump_json()
+                config.api.argument_name: email_info.model_dump_json()
             },
+            "attachments": [{"file_id": fid} for fid in file_ids],
             "execution": {
                 "mode": "sync"
             }
         }
     }
-    response = None
 
-    try:
-        logger.info(f"Отправляю письмо {message.msg_id} в Апи на классификацию")
-        response = await client.post(
-            url=config.api.url,
-            headers=headers,
-            json=payload
-        ) 
-    
-        status_code = response.status_code
+    logger.info(f"Отправляю письмо {email_info.msg_id} в Апи на классификацию")
+    api_response = await safe_api_post(
+        client=client, 
+        url=config.api.url_commands,
+        headers=headers,
+        json=payload
+    )
 
-        if status_code != 200:
-            logger.error(f"Апи ответил не 200 статус-кодом, статус-код ответа: {status_code}, text: {response.text}")
-            return 
+    if api_response is None:
+        return None 
+    elif not isinstance(api_response.payload, ApiMethodPayload):
+        logger.error(f"Неожиданный тип payload: {type(api_response.payload)=}")
+        return None 
 
-        api_response = ApiResponse(**response.json())
-        classification_result = api_response.payload.result.data 
+    classification_result = api_response.payload.result.data 
 
-        logger.info(f"Результат классификации письма {message.msg_id} от Апи: {classification_result}")
-        return classification_result
-    except httpx.HTTPError as http_err:
-        logger.error(f"Ошибка сети при подключении к API: {http_err}", exc_info=True)
-    except (JSONDecodeError, ValidationError) as valid_err:
-        if response is not None:
-            logger.error(
-                f"Не получилось распарсить структуру ответа в известную схему, полученный ответ с апи: {response.text}"
-                f", ошибка: {valid_err}", exc_info=True
-            )
-    except Exception as err:
-        logger.error(f"Неожиданная ошибка при подключении к API: {err}", exc_info=True)
+    logger.info(f"Результат классификации письма {email_info.msg_id} от Апи: {classification_result}")
+    return classification_result
 
 
 async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> None:
@@ -263,7 +322,7 @@ async def process_messages_batch(
 
         async with httpx.AsyncClient(timeout=timeout_config) as http_client:
             classify_results = await asyncio.gather(
-                *(classify_email(client=http_client, message=email_info, config=config) 
+                *(classify_email(client=http_client, email_info=email_info, original_message=messages[email_info.msg_id], config=config) 
                   for email_info in partition_result.passed)    
             )
 
