@@ -2,6 +2,7 @@ import re
 import asyncio 
 import email 
 import logging 
+from pathlib import Path 
 from datetime import datetime, timedelta
 from email.policy import default
 from email.message import EmailMessage
@@ -209,15 +210,23 @@ async def classify_email(
     attachments = list(original_message.iter_attachments())
 
     if attachments:
-        upload_tasks = [
-            upload_file_bytes(
-                client=client,
-                filename=attachment.get_filename() or "",                   # type: ignore
-                file_bytes=attachment.get_payload(decode=True),             # type: ignore
-                config=config
-            )
-            for attachment in attachments
-        ]
+        upload_tasks = []
+
+        for attachment in attachments:
+            filename = attachment.get_filename() or ""
+            file_bytes = attachment.get_payload(decode=True)
+
+            if Path(filename).suffix in {
+                ".pdf",".doc", ".docx", ".txt", ".rtf",
+                ".xls", ".xlsx", ".csv", ".eml", ".msg"
+            }:
+                upload_tasks.append(upload_file_bytes(
+                    client=client,
+                    filename=filename,
+                    file_bytes=file_bytes,  # type: ignore
+                    config=config
+                ))
+
         file_ids = await asyncio.gather(*upload_tasks) 
 
         if None in file_ids: 
