@@ -33,7 +33,8 @@ class ClassificationSettings(BaseModel):
 
 
 class ApiSettings(BaseModel):
-    url: str 
+    url_commands: str 
+    url_files: str
     token: str 
     version: str 
     method_name: str 
@@ -75,7 +76,8 @@ class Config(BaseModel):
         )
 
         api = ApiSettings(
-            url=env("URL"),
+            url_commands=env("URL_COMMANDS"),
+            url_files=env("URL_FILES"),
             token=env("TOKEN"),
             version=env("VERSION"),
             method_name=env("METHOD_NAME"),
