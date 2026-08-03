@@ -1,5 +1,6 @@
 from typing import Literal, Any 
 from dataclasses import dataclass
+from datetime import datetime 
 
 from pydantic import BaseModel, Field
 from email.message import EmailMessage
@@ -32,18 +33,30 @@ class ApiResponse(BaseModel):
     version: str 
     id: str 
     success: bool 
-    payload: ApiPayload 
+    payload: ApiMethodPayload | ApiFilePayload
 
 
-class ApiPayload(BaseModel):
+class ApiFilePayload(BaseModel):
+    file: ApiFileResult 
+
+
+class ApiMethodPayload(BaseModel):
     """Payload ответа API"""
-    result: ApiResult 
+    result: ApiMethodResult 
 
 
-class ApiResult(BaseModel):
+class ApiMethodResult(BaseModel):
     """Результат выполнения метода API"""
     data: ResultApiClassification
     attachments: list[Any]
+
+class ApiFileResult(BaseModel):
+    id: str 
+    name: str 
+    size: int | float 
+    mime_type: str 
+    created_at: datetime
+    expires_at: datetime 
 
 
 class ResultApiClassification(BaseModel):
