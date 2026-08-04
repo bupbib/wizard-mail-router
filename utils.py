@@ -3,6 +3,7 @@ from typing import cast
 from json import JSONDecodeError
 from email.message import EmailMessage
 from email.utils import parseaddr
+from datetime import datetime 
 
 import httpx
 from pydantic import ValidationError
@@ -48,9 +49,9 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
         body = part.get_content().strip() if part else ""
 
         if (received_at := email.get("Date")) is not None:
-            received_at = received_at.datetime.strftime("%d.%m.%Y %H:%M")
+            received_at = received_at.datetime
         else:
-            received_at = ""
+            received_at = datetime.now()
 
         email_info = EmailInfo(
             msg_id=msg_id,
