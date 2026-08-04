@@ -217,8 +217,8 @@ async def classify_email(
             file_bytes = attachment.get_payload(decode=True)
 
             if Path(filename).suffix in {
-                ".pdf",".doc", ".docx", ".txt", ".rtf",
-                ".xls", ".xlsx", ".csv", ".eml", ".msg"
+                ".pdf",".doc", ".docx", ".txt", ".rtf", ".odt",
+                ".xls", ".xlsx", ".csv", ".eml", ".msg", ".xml"
             }:
                 upload_tasks.append(upload_file_bytes(
                     client=client,
