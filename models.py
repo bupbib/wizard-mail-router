@@ -23,6 +23,7 @@ class EmailInfo(BaseModel, frozen=True):
 class ForwardMessage:
     msg_id: str 
     original_message: EmailMessage
+    department: str
     recipients: list[str]
 
 
