@@ -15,6 +15,7 @@ class EmailInfo:
     msg_id: str 
     subject: str 
     from_: str 
+    to: str 
     in_reply_to: str 
     references: str
     received_at: datetime 
