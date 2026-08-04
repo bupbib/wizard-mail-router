@@ -26,8 +26,14 @@ class ForwardMessage:
     recipients: list[str]
 
 
+class ClassifyMessage(BaseModel):
+    email_info: EmailInfo
+    department: str 
+    redirect: list[str]
+
+
 class FilterResult(BaseModel):
-    classified: dict[EmailInfo, list[str]]
+    classified: list[ClassifyMessage]
     passed: list[EmailInfo]
     failed: list[EmailInfo] 
 
@@ -70,6 +76,7 @@ class ResultApiClassification(BaseModel):
 
 
 class ReportRecord(BaseModel):
+    msg_id: str 
     received_at: str 
     from_: str 
     subject: str 
