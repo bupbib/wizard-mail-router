@@ -12,6 +12,7 @@ class EmailInfo(BaseModel, frozen=True):
     from_: str 
     in_reply_to: str 
     references: str
+    received_at: str 
     body: str  
 
 
