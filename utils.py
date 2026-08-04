@@ -40,7 +40,7 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
     classified = {}
     passed = []
     failed = []
-    skip_prefixes = ("fwd:", "fw:", "пересл:", "re:", "отв:")
+    skip_prefixes = ("re:", "отв:")
 
     logger.info(f"Пришло {len(messages)} писем на первичный анализ")
 
@@ -60,7 +60,7 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
         _, clean_email = parseaddr(email_info.from_)
         clean_email = clean_email.lower().strip()
 
-        if email_info.in_reply_to or email_info.references or email_info.subject.lower().startswith(skip_prefixes):
+        if email_info.subject.lower().startswith(skip_prefixes):
             result_partition = "НЕ прошло первичный анализ"
             failed.append(email_info)
         elif (department := config.classification.rules.get(clean_email)) is not None:
