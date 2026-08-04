@@ -48,12 +48,18 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
         part = email.get_body(preferencelist=("plain", "html"))
         body = part.get_content().strip() if part else ""
 
+        if (received_at := email.get("Date")) is not None:
+            received_at = received_at.datetime.strftime("%d.%m.%Y %H:%M")
+        else:
+            received_at = ""
+
         email_info = EmailInfo(
             msg_id=msg_id,
             subject=(email.get("Subject") or "").strip(),
             from_=email.get("From") or "",
             in_reply_to=email.get("In-Reply-To") or "",
             references=email.get("References") or "",
+            received_at=received_at,
             body=body
         )
 
