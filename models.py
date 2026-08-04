@@ -64,12 +64,3 @@ class ResultApiClassification(BaseModel):
     is_target: bool 
     department: DepartmentType | None 
     reasoning: str = Field(..., min_length=1)
-
-
-class ReportRecord(BaseModel):
-    msg_id: str 
-    received_at: str 
-    from_: str 
-    subject: str 
-    department: DepartmentType | None = None 
-    recipients: list[str] | None = None 
