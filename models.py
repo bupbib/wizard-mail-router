@@ -23,7 +23,7 @@ class EmailInfo:
     department: DepartmentType | None = None 
     recipients: list[str] | None = None 
 
-    def model_to_api(self):
+    def model_to_api(self) -> str:
         return json.dumps(
             obj={
                 "msg_id": self.msg_id,
