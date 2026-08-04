@@ -57,6 +57,7 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
             msg_id=msg_id,
             subject=(email.get("Subject") or "").strip(),
             from_=email.get("From") or "",
+            to=email.get("To") or "",
             in_reply_to=email.get("In-Reply-To") or "",
             references=email.get("References") or "",
             received_at=received_at,
