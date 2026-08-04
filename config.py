@@ -1,5 +1,6 @@
 import sys 
 import logging 
+from pathlib import Path 
 
 from pydantic import BaseModel
 from environs import Env
@@ -41,11 +42,18 @@ class ApiSettings(BaseModel):
     argument_name: str 
 
 
+class ReportSettings(BaseModel):
+    subject: str 
+    responsible: list[str]
+    filepath: Path
+
+
 class Config(BaseModel):
     mail: MailSettings
     redirection: RedirectionSettings
     classification: ClassificationSettings
     api: ApiSettings
+    report: ReportSettings
 
     @classmethod
     def from_env(cls, path: str | None = None) -> "Config":
@@ -84,13 +92,20 @@ class Config(BaseModel):
             argument_name=env("ARGUMENT_NAME")
         )
 
+        report = ReportSettings(
+            subject=env("SUBJECT"),
+            responsible=env.list("RESPONSIBLE"),
+            filepath=Path(env("FILEPATH"))
+        )
+
         logger.info("Все конфигурационные данные успешно настроены")
 
         return cls(
             mail=mail, 
             redirection=redirection, 
             classification=classification,
-            api=api
+            api=api,
+            report=report 
         )
 
     @staticmethod
