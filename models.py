@@ -9,7 +9,8 @@ from email.message import EmailMessage
 type DepartmentType = Literal["ork", "hr", "sales"]
 
 
-class EmailInfo(BaseModel, frozen=True):
+@dataclass
+class EmailInfo:
     msg_id: str 
     subject: str 
     from_: str 
@@ -17,24 +18,13 @@ class EmailInfo(BaseModel, frozen=True):
     references: str
     received_at: str 
     body: str  
-
-
-@dataclass
-class ForwardMessage:
-    msg_id: str 
     original_message: EmailMessage
-    department: str
-    recipients: list[str]
-
-
-class ClassifyMessage(BaseModel):
-    email_info: EmailInfo
-    department: str 
-    redirect: list[str]
+    department: DepartmentType | None = None 
+    recipients: list[str] | None = None 
 
 
 class FilterResult(BaseModel):
-    classified: list[ClassifyMessage]
+    classified: list[EmailInfo]
     passed: list[EmailInfo]
     failed: list[EmailInfo] 
 
