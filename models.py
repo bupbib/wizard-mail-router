@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 from email.message import EmailMessage
 
 
+type DepartmentType = Literal["ork", "hr", "sales"]
+
+
 class EmailInfo(BaseModel, frozen=True):
     msg_id: str 
     subject: str 
@@ -62,5 +65,13 @@ class ApiFileResult(BaseModel):
 
 class ResultApiClassification(BaseModel):
     is_target: bool 
-    department: Literal["ork", "hr", "sales"] | None 
+    department: DepartmentType | None 
     reasoning: str = Field(..., min_length=1)
+
+
+class ReportRecord(BaseModel):
+    received_at: str 
+    from_: str 
+    subject: str 
+    department: DepartmentType | None = None 
+    recipients: list[str] | None = None 
