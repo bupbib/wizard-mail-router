@@ -1,3 +1,4 @@
+import json 
 from typing import Literal, Any 
 from dataclasses import dataclass
 from datetime import datetime 
@@ -16,11 +17,24 @@ class EmailInfo:
     from_: str 
     in_reply_to: str 
     references: str
-    received_at: str 
+    received_at: datetime 
     body: str  
     original_message: EmailMessage
     department: DepartmentType | None = None 
     recipients: list[str] | None = None 
+
+    def model_to_api(self):
+        return json.dumps(
+            obj={
+                "msg_id": self.msg_id,
+                "subject": self.subject,
+                "from": self.from_,
+                "in_reply_to": self.in_reply_to,
+                "references": self.references,
+                "body": self.body 
+            },
+            ensure_ascii=False 
+        )
 
 
 class FilterResult(BaseModel):
