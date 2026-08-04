@@ -1,12 +1,13 @@
 import logging 
-import httpx
+from typing import cast 
 from json import JSONDecodeError
 from email.message import EmailMessage
 from email.utils import parseaddr
 
+import httpx
 from pydantic import ValidationError
 
-from models import EmailInfo, FilterResult, ApiResponse, ClassifyMessage
+from models import EmailInfo, FilterResult, ApiResponse, DepartmentType
 from config import Config 
 
 
@@ -16,26 +17,24 @@ logger = logging.getLogger(__name__)
 def partition_emails(messages: dict[str, EmailMessage], config: Config) -> FilterResult:
     """
     Разделяет входящие письма на три категории:
-    1. Ответы/пересылки (failed) — исключаются из обработки.
-    2. Совпадения по локальным правилам (classified) — маршрутизируются в отделы 
-       напрямую без обращения к ИИ.
-    3. Новые целевые письма (passed) — отправляются на классификацию в ИИ-сервис.
+    1. Ответы (failed) — исключаются из обработки.
+    2. Совпадения по локальным правилам (classified) — маршрутизируются напрямую.
+    3. Остальные (passed) — отправляются на ИИ-классификацию.
 
-    Критерии фильтрации:
-        - Исключение: наличие заголовков In-Reply-To/References или префиксов Re:, Fwd:, etc.
-        - Локальное правило: адрес отправителя (извлекается через parseaddr) найден в config.classification.rules.
-        - ИИ-классификация: письмо является новым и не подпадает под локальные правила.
+    Критерии:
+        - Ответ: тема начинается с Re: или Отв:.
+        - Локальное правило: отправитель найден в config.classification.rules.
+        - ИИ-классификация: все остальные письма.
 
     Args:
-        messages (dict[str, EmailMessage]): Словарь извлеченных писем {msg_id: EmailMessage}.
-        config (Config): Объект конфигурации приложения с правилами маршрутизации и фильтрации.
+        messages: Словарь писем {msg_id: EmailMessage}.
+        config: Объект конфигурации.
 
     Returns:
-        FilterResult: Объект результатов со следующими полями:
-            - classified (dict[EmailInfo, list[str]]): Письма, классифицированные без ИИ,
-              маппированные на список адресов перенаправления.
-            - passed (list[EmailInfo]): Письма-инициаторы новых тем, требующие AI-классификации.
-            - failed (list[EmailInfo]): Письма-ответы или пересылки, не требующие AI-обработки.
+        FilterResult: Объект с полями:
+            - classified (list[EmailInfo]): Письма с заполненными department и recipients.
+            - passed (list[EmailInfo]): Письма для ИИ-классификации.
+            - failed (list[EmailInfo]): Письма-ответы.
     """
     classified = []
     passed = []
@@ -60,7 +59,8 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
             in_reply_to=email.get("In-Reply-To") or "",
             references=email.get("References") or "",
             received_at=received_at,
-            body=body
+            body=body,
+            original_message=email
         )
 
         _, clean_email = parseaddr(email_info.from_)
@@ -73,7 +73,9 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
             redirect = getattr(config.redirection, department, None) 
 
             if redirect is not None:
-                classified.append(ClassifyMessage(email_info=email_info, department=department, redirect=redirect))
+                email_info.department = cast(DepartmentType, department)
+                email_info.recipients = redirect 
+                classified.append(email_info)
                 result_partition = "успешно классифицировано для перенаправления без помощи ИИ"
             else:
                 logger.error(
