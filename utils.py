@@ -6,7 +6,7 @@ from email.utils import parseaddr
 
 from pydantic import ValidationError
 
-from models import EmailInfo, FilterResult, ApiResponse
+from models import EmailInfo, FilterResult, ApiResponse, ClassifyMessage
 from config import Config 
 
 
@@ -37,7 +37,7 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
             - passed (list[EmailInfo]): Письма-инициаторы новых тем, требующие AI-классификации.
             - failed (list[EmailInfo]): Письма-ответы или пересылки, не требующие AI-обработки.
     """
-    classified = {}
+    classified = []
     passed = []
     failed = []
     skip_prefixes = ("re:", "отв:")
@@ -73,7 +73,7 @@ def partition_emails(messages: dict[str, EmailMessage], config: Config) -> Filte
             redirect = getattr(config.redirection, department, None) 
 
             if redirect is not None:
-                classified[email_info] = redirect
+                classified.append(ClassifyMessage(email_info=email_info, department=department, redirect=redirect))
                 result_partition = "успешно классифицировано для перенаправления без помощи ИИ"
             else:
                 logger.error(
