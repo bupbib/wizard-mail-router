@@ -18,6 +18,7 @@ from models import (
 )
 from utils import partition_emails, safe_api_post
 from mail_client import get_mail_imap_client
+from report import record_entry
 
 
 logger = logging.getLogger(__name__)
@@ -338,7 +339,7 @@ async def process_messages_batch(
 
     if partition_result.passed:
         logger.info("Отправляю письма на классификацию ИИ")
-        timeout_config = httpx.Timeout(timeout=30, connect=10)
+        timeout_config = httpx.Timeout(timeout=120, connect=10)
 
         async with httpx.AsyncClient(timeout=timeout_config) as http_client:
             classify_results = await asyncio.gather(
@@ -456,7 +457,10 @@ async def main(config: Config):
             if saved_messages is None:
                 break 
 
-            await process_messages_batch(client=client, config=config, messages=saved_messages)
+            successful_messages = await process_messages_batch(client=client, config=config, messages=saved_messages)
+
+            if successful_messages is not None:
+                await record_entry(messages=successful_messages, config=config) 
 
             # TODO: Убрать потом отсюда break
             break 
