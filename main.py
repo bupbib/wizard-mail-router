@@ -341,7 +341,7 @@ async def process_messages_batch(
 
     if partition_result.passed:
         logger.info("Отправляю письма на классификацию ИИ")
-        timeout_config = httpx.Timeout(timeout=120, connect=10)
+        timeout_config = httpx.Timeout(timeout=180, connect=10)
 
         async with httpx.AsyncClient(timeout=timeout_config) as http_client:
             classify_results = await asyncio.gather(
@@ -475,7 +475,8 @@ async def main(config: Config):
             if successful_messages is not None:
                 await record_entry(messages=successful_messages, config=config) 
 
-            # TODO: Убрать потом отсюда break
+            # TODO: Убрать потом отсюда break и вызов отправки отчета
+            await sending_report(config=config)
             break 
 
 
