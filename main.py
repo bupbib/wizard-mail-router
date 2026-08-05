@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from email.policy import default
 from email.message import EmailMessage
+from typing import cast 
 
 import aioimaplib
 import aiosmtplib
@@ -13,8 +14,7 @@ import httpx
 
 from config import Config 
 from models import (
-    EmailInfo, ApiFilePayload, ResultApiClassification, 
-    ForwardMessage, ApiMethodPayload
+    EmailInfo, ApiFilePayload, ResultApiClassification, ApiMethodPayload
 )
 from utils import partition_emails, safe_api_post
 from mail_client import get_mail_imap_client
@@ -24,9 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 async def forward_messages(
-    messages: list[ForwardMessage],
+    messages: list[EmailInfo],
     config: Config
-) -> list[str]:
+) -> list[EmailInfo]:
     """
     Пересылает список писем через SMTP с сохранением оригинального форматирования и вложений.
 
@@ -35,15 +35,19 @@ async def forward_messages(
     Обрабатывает частичную доставку адресатам и специфичные тайм-ауты сервера (SMTPReadTimeoutError).
 
     Args:
-        messages: Список объектов ForwardMessage, содержащих исходное письмо, 
-                  список получателей и msg_id.
-        config: Объект конфигурации с параметрами подключения к SMTP-серверу 
-                (хост, порт, учетные данные, timeout).
+        messages (list[EmailInfo]): Список объектов EmailInfo с заполненными:
+            - original_message: Оригинал письма с вложениями.
+            - recipients: Список адресатов для пересылки.
+            - from_, to, subject, received_at: Для формирования шапки.
+        config (Config): Объект конфигурации с параметрами подключения к SMTP-серверу.
 
     Returns:
-        Список msg_id писем, которые были успешно доставлены или приняты сервером.
+        list[EmailInfo]: Список писем, которые были успешно отправлены.
+            Возвращаются только те объекты EmailInfo, чьи письма 
+            были приняты SMTP-сервером (даже если частично).
+            Если письмо не отправилось — оно не включается в результат.
     """
-    successful_msg_ids = []
+    successful_messages = []
     try:
         async with aiosmtplib.SMTP(
             hostname=config.mail.smtp_host, 
@@ -54,39 +58,35 @@ async def forward_messages(
             password=config.mail.password 
             ) as client:
             
-            for message in messages:
+            for email_info in messages:
                 try:
-                    orig = message.original_message
-
-                    original_from = orig["From"]
-                    original_to = orig["To"]
-                    original_date = (orig["Date"]).datetime
-                    original_subject = orig["Subject"]
+                    orig = email_info.original_message
+                    received_at = email_info.received_at
 
                     day = [
                         "Понедельник", "Вторник", "Среда", 
                         "Четверг", "Пятница", "Суббота", "Воскресенье"
-                    ][original_date.weekday()]
+                    ][received_at.weekday()]
                     month = [
                         "", "января", "февраля", "марта", "апреля", "мая", "июня",
                         "июля", "августа", "сентября", "октября", "ноября", "декабря"
-                    ][original_date.month]
-                    z = original_date.strftime("%z")
-                    original_date = original_date.strftime(f"{day}, %d {month} %Y, %H:%M {z[:3]}:{z[3:]}")
+                    ][received_at.month]
+                    z = received_at.strftime("%z")
+                    original_date = received_at.strftime(f"{day}, %d {month} %Y, %H:%M {z[:3]}:{z[3:]}")
 
                     fwd_header = (
                         "-------- Пересылаемое сообщение --------\n"
-                        f"От кого: {original_from}\n"
-                        f"Кому: {original_to}\n"
+                        f"От кого: {email_info.from_}\n"
+                        f"Кому: {email_info.to}\n"
                         f"Дата: {original_date}\n"
-                        f"Тема: {original_subject}\n\n"
+                        f"Тема: {email_info.subject}\n\n"
                     )
 
                     new_msg = EmailMessage()
 
-                    new_msg["To"] = ", ".join(message.recipients)
+                    new_msg["To"] = ", ".join(cast(list[str], email_info.recipients))
                     new_msg["From"] = config.mail.email 
-                    new_msg["Subject"] = f"Fwd: {original_subject}"
+                    new_msg["Subject"] = f"Fwd: {email_info.subject}"
 
                     orig_body = orig.get_body(preferencelist=("plain", "html"))
                     orig_text = orig_body.get_content() if orig_body else ""    
@@ -109,29 +109,29 @@ async def forward_messages(
                     errors, response_text = await client.send_message(
                         new_msg,
                         sender=config.mail.email,
-                        recipients=message.recipients
+                        recipients=email_info.recipients
                     )
 
                     if errors:
                         logger.warning(
-                            f"Письмо {message.msg_id} отправлено частично. "
+                            f"Письмо {email_info.msg_id} отправлено частично. "
                             f"Не удалось доставить адресатам: {errors}"
                         )
                     else:
                         logger.info(
-                            f"Письмо {message.msg_id} успешно доставлено всем адресатам: {message.recipients}"
+                            f"Письмо {email_info.msg_id} успешно доставлено всем адресатам: {email_info.recipients}"
                             f"{response_text=}"
                         )
 
-                    successful_msg_ids.append(message.msg_id) 
+                    successful_messages.append(email_info) 
                 except (aiosmtplib.SMTPException, aiosmtplib.SMTPDataError) as msg_err:
-                    logger.error(f"Ошибка при отправке письма {message.msg_id}: {msg_err}", exc_info=True)  
+                    logger.error(f"Ошибка при отправке письма {email_info.msg_id}: {msg_err}", exc_info=True)  
     except aiosmtplib.SMTPConnectError as con_err:
         logger.error(f"Не удалось подключиться к серверу при входе в контекст: {con_err}", exc_info=True)
     except aiosmtplib.SMTPException as smtp_err:
         logger.error(f"Произошла ошибка SMTP внутри контекста: {smtp_err}", exc_info=True)
 
-    return successful_msg_ids 
+    return successful_messages 
 
 
 async def upload_file_bytes(
@@ -183,7 +183,6 @@ async def upload_file_bytes(
 async def classify_email(
     client: httpx.AsyncClient, 
     email_info: EmailInfo,
-    original_message: EmailMessage, 
     config: Config
 ) -> ResultApiClassification | None:
     """
@@ -197,8 +196,7 @@ async def classify_email(
     
     Args:
         client: Асинхронный HTTP-клиент (httpx.AsyncClient) для выполнения запросов.
-        email_info (EmailInfo): Объект с данными письма (тема, отправитель, тело).
-        original_message (EmailMessage): Оригинальный объект письма для извлечения вложений.
+        email_info (EmailInfo): Объект с данными письма.
         config (Config): Объект конфигурации с параметрами API.
     
     Returns:
@@ -207,7 +205,7 @@ async def classify_email(
             - None: При любой ошибке.
     """
     file_ids = []
-    attachments = list(original_message.iter_attachments())
+    attachments = list(email_info.original_message.iter_attachments())
 
     if attachments:
         upload_tasks = []
@@ -242,7 +240,7 @@ async def classify_email(
         "payload": {
             "name": config.api.method_name,
             "arguments": {
-                config.api.argument_name: email_info.model_dump_json()
+                config.api.argument_name: email_info.model_to_api()
             },
             "attachments": [{"file_id": fid} for fid in file_ids],
             "execution": {
@@ -271,7 +269,7 @@ async def classify_email(
     return classification_result
 
 
-async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> None:
+async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> bool:
     """
     Помечает указанные письма флагом \\Seen (прочитано) в IMAP-сервере.
 
@@ -280,50 +278,63 @@ async def mark_as_read(client: aioimaplib.IMAP4_SSL, msg_ids: str) -> None:
     Args:
         client: Активный SSL-клиент IMAP (aioimaplib).
         msg_ids: Строка с UID писем через запятую (например, "101,102,103").
+    
+    Returns:
+        bool: 
+            - True: все валидные UID из списка успешно помечены (или список пуст).
+            - False: произошла ошибка (соединение, серверная ошибка), ни одно письмо не было помечено.
     """
     if not msg_ids: 
-        return None 
+        return True 
     
     status, data = await client.uid("STORE", msg_ids, "+FLAGS", "\\Seen")
 
     if status == "OK":
-        logger.info(f"Письма {msg_ids} успешно помечены как прочитанное")
+        logger.info(f"Письма {msg_ids} успешно помечены как прочитанные")
+        return True 
     else:
         report = data[0].decode() if data else "неизвестная ошибка"
         logger.error(f"Не удалось пометить письма {msg_ids} как прочитанные, причина: {report}")
+        return False 
 
 
 async def process_messages_batch(
     client: aioimaplib.IMAP4_SSL, 
     config: Config,
     messages: dict[str, EmailMessage]
-) -> None:
+) -> None | list[EmailInfo]:
     """
     Осуществляет конвейерную обработку входящих писем.
 
-    Сначала разделяет письма на нецелевые, предклассифицированные и подходящие под ИИ-анализ.
-    Отправляет целевую группу на асинхронную классификацию в ИИ, распределяет успешные 
-    письма по департаментам и выполняет массовую пересылку (forward). В завершение 
-    помечает прочитанными (`\\Seen`) в IMAP все обработанные, нецелевые и сбойные письма.
+    Этапы:
+        1. Разделяет письма на три категории (partition_emails):
+           - failed: ответы (Re:/Отв:) — сразу в прочитанные.
+           - classified: локальные правила — в очередь на отправку.
+           - passed: требуют ИИ-классификации.
+        2. Для passed писем асинхронно запрашивает ИИ-классификацию.
+        3. Целевые письма (из classified и успешных ИИ) отправляет через forward_messages.
+        4. Все обработанные письма помечает как прочитанные (\\Seen).
 
     Args:
-        client: Активный SSL-клиент IMAP (aioimaplib) для маркировки писем.
-        config: Объект конфигурации с правилами маршрутизации и SMTP/ИИ параметрами.
-        messages: Словарь с входящими письмами, где ключ — UID письма, 
-                  а значение — объект EmailMessage.
+        client: Активный SSL-клиент IMAP для маркировки писем.
+        config: Объект конфигурации с правилами маршрутизации и параметрами.
+        messages: Словарь входящих писем {UID: EmailMessage}.
+
+    Returns:
+        list[EmailInfo] | None:
+            - list[EmailInfo]: Все письма, которые были помечены как прочитанные.
+            - None: Если не удалось пометить письма (ошибка IMAP).
     """
     partition_result = partition_emails(messages=messages, config=config) 
 
     messages_to_forward = []
-    ids_to_mark_as_read = []
+    messages_to_mark_as_read = []
 
     for email_info in partition_result.failed:
-        ids_to_mark_as_read.append(email_info.msg_id)
+        messages_to_mark_as_read.append(email_info)
 
-    for email_info, recipients in partition_result.classified.items():
-        messages_to_forward.append(
-            ForwardMessage(msg_id=email_info.msg_id, original_message=messages[email_info.msg_id], recipients=recipients)
-        )
+    for email_info in partition_result.classified:
+        messages_to_forward.append(email_info)
 
     if partition_result.passed:
         logger.info("Отправляю письма на классификацию ИИ")
@@ -331,8 +342,8 @@ async def process_messages_batch(
 
         async with httpx.AsyncClient(timeout=timeout_config) as http_client:
             classify_results = await asyncio.gather(
-                *(classify_email(client=http_client, email_info=email_info, original_message=messages[email_info.msg_id], config=config) 
-                  for email_info in partition_result.passed)    
+                *(classify_email(client=http_client, email_info=email_info, config=config) 
+                for email_info in partition_result.passed)    
             )
 
         for email_info, classify in zip(partition_result.passed, classify_results):
@@ -343,22 +354,25 @@ async def process_messages_batch(
                 redirect = getattr(config.redirection, classify.department.lower(), None)
 
                 if redirect is not None:
-                    messages_to_forward.append(
-                        ForwardMessage(msg_id=email_info.msg_id, original_message=messages[email_info.msg_id], recipients=redirect)
-                    ) 
+                    email_info.department = classify.department
+                    email_info.recipients = redirect 
+                    messages_to_forward.append(email_info)
                 else:
                     # по сути таких ситуаций быть не должно, но на всякий случай
                     logger.error(f"{classify.department.lower()=} не удалось найти в {config.redirection}")
             else:
-                ids_to_mark_as_read.append(email_info.msg_id) 
+                messages_to_mark_as_read.append(email_info)
 
     if messages_to_forward:
         logger.info(f"Начинаю переотправку писем ответственным: {len(messages_to_forward)}")
-        forward_ids = await forward_messages(messages=messages_to_forward, config=config)
-        ids_to_mark_as_read.extend(forward_ids)
+        successful_forward_msgs = await forward_messages(messages=messages_to_forward, config=config)
+        messages_to_mark_as_read.extend(successful_forward_msgs)
 
-    if ids_to_mark_as_read:
-        await mark_as_read(client=client, msg_ids=",".join(ids_to_mark_as_read))
+    if messages_to_mark_as_read:
+        if not (
+            await mark_as_read(client=client, msg_ids=",".join(email_info.msg_id for email_info in messages_to_mark_as_read))
+        ): return None 
+        return messages_to_mark_as_read
 
 
 async def fetch_multiple_messages(client: aioimaplib.IMAP4_SSL, msg_ids: list[str]) -> dict[str, EmailMessage] | None:
