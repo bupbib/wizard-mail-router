@@ -47,6 +47,7 @@ class ReportSettings(BaseModel):
     responsible: list[str]
     filepath: Path
     headers: list[str]
+    work_time: str 
 
 
 class Config(BaseModel):
@@ -97,7 +98,8 @@ class Config(BaseModel):
             subject=env("SUBJECT"),
             responsible=env.list("RESPONSIBLE"),
             filepath=Path(env("FILEPATH")),
-            headers=env.list("HEADERS")
+            headers=env.list("HEADERS"),
+            work_time=env("WORK_TIME")
         )
 
         logger.info("Все конфигурационные данные успешно настроены")
