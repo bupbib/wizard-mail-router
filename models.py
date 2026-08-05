@@ -37,6 +37,15 @@ class EmailInfo:
             ensure_ascii=False 
         )
 
+    def model_to_report(self) -> list[str]:
+        return [
+            self.received_at.strftime("%d.%m.%Y %H:%M"),
+            self.from_,
+            self.subject,
+            self.department or "нецелевое",
+            ", ".join(self.recipients) if self.recipients else "не_пересылалось"
+        ]
+
 
 class FilterResult(BaseModel):
     classified: list[EmailInfo]
