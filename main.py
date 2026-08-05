@@ -11,6 +11,8 @@ from typing import cast
 import aioimaplib
 import aiosmtplib
 import httpx 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from config import Config 
 from models import (
@@ -18,7 +20,7 @@ from models import (
 )
 from utils import partition_emails, safe_api_post
 from mail_client import get_mail_imap_client
-from report import record_entry
+from report import record_entry, sending_report
 
 
 logger = logging.getLogger(__name__)
@@ -431,6 +433,17 @@ async def fetch_multiple_messages(client: aioimaplib.IMAP4_SSL, msg_ids: list[st
 
 async def main(config: Config):
     config.setup_logging()
+
+    scheduler = AsyncIOScheduler()
+    trigger = CronTrigger(hour=config.report.work_time, minute="0", second="0")
+    scheduler.add_job(
+        func=sending_report,
+        trigger=trigger,
+        kwargs={"config": config}
+    )
+
+    scheduler.start()
+    logger.info("Фоновая задача по отправке отчета запущена")
 
     async with get_mail_imap_client(config) as client:
         while True:
