@@ -47,7 +47,8 @@ class EmailInfo:
         ]
 
 
-class FilterResult(BaseModel):
+@dataclass
+class FilterResult:
     classified: list[EmailInfo]
     passed: list[EmailInfo]
     failed: list[EmailInfo] 
