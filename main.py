@@ -475,10 +475,6 @@ async def main(config: Config):
             if successful_messages is not None:
                 await record_entry(messages=successful_messages, config=config) 
 
-            # TODO: Убрать потом отсюда break и вызов отправки отчета
-            await sending_report(config=config)
-            break 
-
 
 if __name__ == "__main__":
     try:
