@@ -1,4 +1,5 @@
 import re 
+import io 
 import asyncio 
 import email 
 import logging 
@@ -7,6 +8,7 @@ from datetime import datetime, timedelta
 from email.policy import default
 from email.message import EmailMessage
 from typing import cast 
+from pypdf import PdfReader
 
 import aioimaplib
 import aiosmtplib
@@ -217,16 +219,33 @@ async def classify_email(
             filename = attachment.get_filename() or ""
             file_bytes = attachment.get_payload(decode=True)
 
-            if Path(filename).suffix in {
+            if not isinstance(file_bytes, bytes):
+                logger.warning(f"Не удалось прочитать вложение {filename}, пропускаем")
+                continue 
+
+            suffix = Path(filename).suffix 
+
+            if suffix not in {
                 ".pdf",".doc", ".docx", ".txt", ".rtf", ".odt",
                 ".xls", ".xlsx", ".csv", ".eml", ".msg", ".xml"
             }:
-                upload_tasks.append(upload_file_bytes(
-                    client=client,
-                    filename=filename,
-                    file_bytes=file_bytes,  # type: ignore
-                    config=config
-                ))
+                continue 
+
+            if suffix == ".pdf":
+                try:
+                    if len(PdfReader(io.BytesIO(file_bytes)).pages) > 20:
+                        logger.info(f"PDF '{filename}' > 20 страниц, пропускаем")
+                        continue  
+                except Exception:
+                    logger.info(f"Не удалось проверить страницы в PDF '{filename}', пропускаем")
+                    continue 
+            
+            upload_tasks.append(upload_file_bytes(
+                client=client,
+                filename=filename,
+                file_bytes=file_bytes,  # type: ignore
+                config=config
+            ))
 
         file_ids = await asyncio.gather(*upload_tasks) 
 
