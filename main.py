@@ -8,11 +8,11 @@ from datetime import datetime, timedelta
 from email.policy import default
 from email.message import EmailMessage
 from typing import cast 
-from pypdf import PdfReader
 
 import aioimaplib
 import aiosmtplib
 import httpx 
+from pypdf import PdfReader
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
